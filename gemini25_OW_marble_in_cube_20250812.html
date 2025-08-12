@@ -1,0 +1,503 @@
+<!--
+Gemini 2.5 Pro
+
+Prompt: gemini25_OW_template_20250812.html
+Analyze my code.
+Adjust my code, add huge transparent 3D cube balancing on corner tip suspended over terrain. Inside 3D cube place transparent marble, without gravity, bouncing around inside the 3D cube. When marble bounces against 3D cube transparent walls, 3D cube side turns half opaque white briefly upon marble bounce.
+Add trailing smoke trail to the marble.
+
+-->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Open World 3D FPV Explorer</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #AACCFF;
+        }
+        canvas {
+            display: block;
+        }
+        #instructions {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background-color: rgba(0, 0, 0, 0.5);
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: sans-serif;
+            z-index: 10; /* Ensure instructions are above canvas */
+        }
+    </style>
+</head>
+<body>
+
+<div id="instructions">
+    Move: Up/Down Arrows<br>
+    Rotate: Left/Right Arrows<br>
+    Switch Camera: C<br>
+    <br>
+    Watch the Cube and Marble!
+</div>
+
+<script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+        }
+    }
+</script>
+
+<script type="module">
+    import * as THREE from 'three';
+
+    let scene, camera, renderer, person;
+    let keys = {};
+    const moveSpeed = 0.1;
+    const rotateSpeed = 0.05;
+    let isFPV = false;
+
+    // --- Variables for the cube and marble ---
+    let clock = new THREE.Clock();
+    let floatingCube;
+    let marble;
+    let marbleVelocity = new THREE.Vector3();
+
+    const CUBE_SIZE = 12;
+    const MARBLE_RADIUS = 0.5;
+    const INITIAL_MARBLE_SPEED = 4;
+    const FLASH_DURATION = 0.2;
+    const FLASH_OPACITY = 0.6;
+    const CUBE_DEFAULT_OPACITY = 0.1;
+    let cubeFaceMaterials = [];
+    let flashTimers = [];
+
+    // --- New variables for the smoke trail ---
+    let instancedSmoke;
+    const MAX_SMOKE_PARTICLES = 300;
+    const PARTICLE_LIFESPAN = 2.5; // in seconds
+    const SMOKE_EMIT_RATE = 0.01; // seconds between emits
+    let smokeEmitTimer = 0;
+    let smokeParticles = [];
+    let currentSmokeParticleIndex = 0;
+    // ------------------------------------------
+
+    function init() {
+        // Scene
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87ceeb);
+        scene.fog = new THREE.Fog(0x87ceeb, 0, 75);
+
+        // Camera
+        camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+
+        // Renderer
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.shadowMap.enabled = true;
+        document.body.appendChild(renderer.domElement);
+
+        // Lights
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        scene.add(ambientLight);
+
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+        directionalLight.position.set(5, 10, 7.5);
+        directionalLight.castShadow = true;
+        directionalLight.shadow.mapSize.width = 1024;
+        directionalLight.shadow.mapSize.height = 1024;
+        directionalLight.shadow.camera.near = 0.5;
+        directionalLight.shadow.camera.far = 50;
+        directionalLight.shadow.camera.left = -20;
+        directionalLight.shadow.camera.right = 20;
+        directionalLight.shadow.camera.top = 20;
+        directionalLight.shadow.camera.bottom = -20;
+        scene.add(directionalLight);
+
+        // Floor
+        const floorGeometry = new THREE.PlaneGeometry(200, 200);
+        const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x228B22, side: THREE.DoubleSide });
+        const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+        floor.rotation.x = -Math.PI / 2;
+        floor.receiveShadow = true;
+        scene.add(floor);
+
+        // Grid
+        const gridHelper = new THREE.GridHelper(200, 100, 0xcccccc, 0xcccccc);
+        gridHelper.material.opacity = 0.5;
+        gridHelper.material.transparent = true;
+        gridHelper.position.y = 0.01;
+        scene.add(gridHelper);
+
+        // Person
+        createPerson();
+
+        // Populate World
+        populateWorld();
+
+        // --- Create the Floating Cube, Marble, and Smoke Trail ---
+        createFloatingCube();
+        createMarble();
+        createSmokeTrail();
+        // --------------------------------------------------------
+
+        // Controls
+        document.addEventListener('keydown', (event) => {
+            keys[event.code] = true;
+            if (event.code === 'KeyC') {
+                isFPV = !isFPV;
+            }
+        });
+        document.addEventListener('keyup', (event) => {
+            keys[event.code] = false;
+        });
+
+        // Handle window resize
+        window.addEventListener('resize', onWindowResize, false);
+
+        animate();
+    }
+
+    function createPerson() {
+        person = new THREE.Group();
+        person.position.y = 1;
+
+        // Torso
+        const torsoGeometry = new THREE.BoxGeometry(0.5, 0.8, 0.25);
+        const torsoMaterial = new THREE.MeshStandardMaterial({ color: 0x1E90FF });
+        const torso = new THREE.Mesh(torsoGeometry, torsoMaterial);
+        torso.castShadow = true;
+        person.add(torso);
+
+        // Head
+        const headGeometry = new THREE.BoxGeometry(0.3, 0.3, 0.3);
+        const headMaterial = new THREE.MeshStandardMaterial({ color: 0xFFDAB9 });
+        const head = new THREE.Mesh(headGeometry, headMaterial);
+        head.position.y = 0.6;
+        head.castShadow = true;
+        person.add(head);
+
+        // Arms
+        const armGeometry = new THREE.BoxGeometry(0.1, 0.7, 0.1);
+        const armMaterial = new THREE.MeshStandardMaterial({ color: 0xFFDAB9 });
+        const leftArm = new THREE.Mesh(armGeometry, armMaterial);
+        leftArm.position.set(-0.35, 0, 0);
+        leftArm.castShadow = true;
+        person.add(leftArm);
+        const rightArm = new THREE.Mesh(armGeometry, armMaterial);
+        rightArm.position.set(0.35, 0, 0);
+        rightArm.castShadow = true;
+        person.add(rightArm);
+
+        // Legs
+        const legGeometry = new THREE.BoxGeometry(0.15, 0.9, 0.15);
+        const legMaterial = new THREE.MeshStandardMaterial({ color: 0x00008B });
+        const leftLeg = new THREE.Mesh(legGeometry, legMaterial);
+        leftLeg.position.set(-0.15, -0.8, 0);
+        leftLeg.castShadow = true;
+        person.add(leftLeg);
+        const rightLeg = new THREE.Mesh(legGeometry, legMaterial);
+        rightLeg.position.set(0.15, -0.8, 0);
+        rightLeg.castShadow = true;
+        person.add(rightLeg);
+
+        scene.add(person);
+    }
+
+    function populateWorld() {
+        const treeCount = 200;
+        const rockCount = 100;
+
+        // Tree materials
+        const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+        const leavesMaterial = new THREE.MeshStandardMaterial({ color: 0x006400 });
+        const trunkGeometry = new THREE.CylinderGeometry(0.2, 0.3, 1.5, 8);
+        const leavesGeometry = new THREE.ConeGeometry(1, 2, 8);
+        leavesGeometry.translate(0, 1.75, 0);
+        const instancedTreeLeaves = new THREE.InstancedMesh(leavesGeometry, leavesMaterial, treeCount);
+        const instancedTreeTrunks = new THREE.InstancedMesh(trunkGeometry, trunkMaterial, treeCount);
+        instancedTreeLeaves.castShadow = true;
+        instancedTreeTrunks.castShadow = true;
+        scene.add(instancedTreeLeaves, instancedTreeTrunks);
+
+        const rockGeometry = new THREE.IcosahedronGeometry(0.5, 0);
+        const rockMaterial = new THREE.MeshStandardMaterial({ color: 0x808080 });
+        const instancedRock = new THREE.InstancedMesh(rockGeometry, rockMaterial, rockCount);
+        instancedRock.castShadow = true;
+        scene.add(instancedRock);
+
+        const matrix = new THREE.Matrix4();
+        for (let i = 0; i < treeCount; i++) {
+            const position = new THREE.Vector3((Math.random() - 0.5) * 180, 0, (Math.random() - 0.5) * 180);
+            const quaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.random() * Math.PI * 2, 0));
+            const scale = new THREE.Vector3(1, Math.random() * 0.5 + 0.75, 1);
+            matrix.compose(position, quaternion, scale);
+            instancedTreeLeaves.setMatrixAt(i, matrix);
+            instancedTreeTrunks.setMatrixAt(i, matrix);
+        }
+        instancedTreeLeaves.instanceMatrix.needsUpdate = true;
+        instancedTreeTrunks.instanceMatrix.needsUpdate = true;
+
+        for (let i = 0; i < rockCount; i++) {
+            const position = new THREE.Vector3((Math.random() - 0.5) * 180, 0.25, (Math.random() - 0.5) * 180);
+            const quaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI));
+            const scale = new THREE.Vector3(Math.random() * 0.75 + 0.25, Math.random() * 0.75 + 0.25, Math.random() * 0.75 + 0.25);
+            matrix.compose(position, quaternion, scale);
+            instancedRock.setMatrixAt(i, matrix);
+        }
+        instancedRock.instanceMatrix.needsUpdate = true;
+    }
+
+    function createFloatingCube() {
+        floatingCube = new THREE.Group();
+        const cubeHalfSize = CUBE_SIZE / 2;
+        const faceGeometry = new THREE.PlaneGeometry(CUBE_SIZE, CUBE_SIZE);
+        const baseMaterial = new THREE.MeshStandardMaterial({
+            color: 0xffffff,
+            transparent: true,
+            opacity: CUBE_DEFAULT_OPACITY,
+            side: THREE.DoubleSide,
+            roughness: 0.2,
+            metalness: 0.1
+        });
+        const facesData = [
+            { pos: [cubeHalfSize, 0, 0], rot: [0, Math.PI / 2, 0] },
+            { pos: [-cubeHalfSize, 0, 0], rot: [0, -Math.PI / 2, 0] },
+            { pos: [0, cubeHalfSize, 0], rot: [-Math.PI / 2, 0, 0] }, // Note: Corrected to point outwards
+            { pos: [0, -cubeHalfSize, 0], rot: [Math.PI / 2, 0, 0] }, // Note: Corrected to point outwards
+            { pos: [0, 0, cubeHalfSize], rot: [0, 0, 0] },
+            { pos: [0, 0, -cubeHalfSize], rot: [0, Math.PI, 0] }
+        ];
+
+        cubeFaceMaterials = [];
+        flashTimers = [];
+
+        facesData.forEach((face, index) => {
+            const material = baseMaterial.clone();
+            cubeFaceMaterials.push(material);
+            flashTimers.push(0);
+            const mesh = new THREE.Mesh(faceGeometry, cubeFaceMaterials[index]);
+            mesh.position.set(...face.pos);
+            mesh.rotation.set(...face.rot);
+            mesh.receiveShadow = true;
+            mesh.castShadow = true;
+            floatingCube.add(mesh);
+        });
+
+        floatingCube.rotation.z = Math.PI / 4;
+        floatingCube.rotation.x = Math.atan(1 / Math.sqrt(2));
+        const tempVector = new THREE.Vector3(0, -cubeHalfSize, -cubeHalfSize);
+        const rotationMatrix = new THREE.Matrix4().makeRotationFromEuler(floatingCube.rotation);
+        tempVector.applyMatrix4(rotationMatrix);
+        floatingCube.position.y = -tempVector.y + 5;
+        scene.add(floatingCube);
+    }
+
+    function createMarble() {
+        const marbleGeometry = new THREE.SphereGeometry(MARBLE_RADIUS, 32, 32);
+        const marbleMaterial = new THREE.MeshStandardMaterial({
+            color: 0xADD8E6,
+            transparent: true,
+            opacity: 0.8,
+            roughness: 0.3,
+            metalness: 0.1
+        });
+        marble = new THREE.Mesh(marbleGeometry, marbleMaterial);
+        marble.castShadow = true;
+        marble.position.set(0, 0, 0);
+        floatingCube.add(marble);
+        marbleVelocity.random().subScalar(0.5).normalize().multiplyScalar(INITIAL_MARBLE_SPEED);
+    }
+
+    // --- New functions for Smoke Trail ---
+
+    function createSmokeTrail() {
+        // Create a smoke texture programmatically
+        const canvas = document.createElement('canvas');
+        canvas.width = 128;
+        canvas.height = 128;
+        const context = canvas.getContext('2d');
+        const gradient = context.createRadialGradient(
+            canvas.width / 2, canvas.height / 2, 0,
+            canvas.width / 2, canvas.height / 2, canvas.width / 2
+        );
+        gradient.addColorStop(0, 'rgba(255,255,255,0.7)');
+        gradient.addColorStop(1, 'rgba(255,255,255,0)');
+        context.fillStyle = gradient;
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        const smokeTexture = new THREE.CanvasTexture(canvas);
+
+        const smokeGeometry = new THREE.PlaneGeometry(1, 1);
+        const smokeMaterial = new THREE.MeshBasicMaterial({
+            map: smokeTexture,
+            transparent: true,
+            blending: THREE.AdditiveBlending, // Makes the smoke glow a bit
+            depthWrite: false, // Prevents rendering artifacts with transparency
+        });
+
+        instancedSmoke = new THREE.InstancedMesh(smokeGeometry, smokeMaterial, MAX_SMOKE_PARTICLES);
+        instancedSmoke.instanceMatrix.setUsage(THREE.DynamicDrawUsage); // Important for performance
+        scene.add(instancedSmoke);
+
+        // Initialize the particle management array
+        for (let i = 0; i < MAX_SMOKE_PARTICLES; i++) {
+            smokeParticles.push({
+                position: new THREE.Vector3(),
+                age: 0,
+                life: 0,
+                initialScale: 1,
+                currentScale: 0
+            });
+        }
+    }
+
+    function emitSmokeParticle() {
+        const particle = smokeParticles[currentSmokeParticleIndex];
+        marble.getWorldPosition(particle.position); // Get marble's absolute world position
+        particle.age = 0;
+        particle.life = PARTICLE_LIFESPAN * (0.5 + Math.random() * 0.5); // Randomize lifespan
+        particle.initialScale = MARBLE_RADIUS * (0.8 + Math.random() * 0.4);
+        particle.currentScale = particle.initialScale;
+
+        // Cycle to the next particle
+        currentSmokeParticleIndex = (currentSmokeParticleIndex + 1) % MAX_SMOKE_PARTICLES;
+    }
+
+    function updateSmokeTrail(deltaTime) {
+        smokeEmitTimer -= deltaTime;
+        if (smokeEmitTimer <= 0) {
+            emitSmokeParticle();
+            smokeEmitTimer = SMOKE_EMIT_RATE;
+        }
+
+        const dummy = new THREE.Object3D();
+        const tempColor = new THREE.Color();
+
+        for (let i = 0; i < MAX_SMOKE_PARTICLES; i++) {
+            const particle = smokeParticles[i];
+            if (particle.age < particle.life) {
+                particle.age += deltaTime;
+                const lifePercent = particle.age / particle.life;
+
+                // Update scale
+                particle.currentScale = particle.initialScale * (1 + lifePercent * 2);
+
+                // Update matrix
+                dummy.position.copy(particle.position);
+                dummy.scale.set(particle.currentScale, particle.currentScale, particle.currentScale);
+                dummy.lookAt(camera.position); // Make particles always face camera (billboarding)
+                dummy.updateMatrix();
+                instancedSmoke.setMatrixAt(i, dummy.matrix);
+
+                // Update color (for opacity fade)
+                const opacity = 1 - lifePercent;
+                tempColor.setRGB(opacity, opacity, opacity); // Fade to black for AdditiveBlending
+                instancedSmoke.setColorAt(i, tempColor);
+
+            } else {
+                // Hide dead particles
+                dummy.scale.set(0, 0, 0);
+                dummy.updateMatrix();
+                instancedSmoke.setMatrixAt(i, dummy.matrix);
+            }
+        }
+        instancedSmoke.instanceMatrix.needsUpdate = true;
+        if (instancedSmoke.instanceColor) instancedSmoke.instanceColor.needsUpdate = true;
+    }
+
+    // --- Physics and Update Functions ---
+
+    function updateMarblePhysics(deltaTime) {
+        marble.position.addScaledVector(marbleVelocity, deltaTime);
+        const halfBounds = CUBE_SIZE / 2 - MARBLE_RADIUS;
+
+        if (marble.position.x > halfBounds) { marble.position.x = halfBounds; marbleVelocity.x *= -1; flashFace(0); }
+        else if (marble.position.x < -halfBounds) { marble.position.x = -halfBounds; marbleVelocity.x *= -1; flashFace(1); }
+
+        if (marble.position.y > halfBounds) { marble.position.y = halfBounds; marbleVelocity.y *= -1; flashFace(2); }
+        else if (marble.position.y < -halfBounds) { marble.position.y = -halfBounds; marbleVelocity.y *= -1; flashFace(3); }
+
+        if (marble.position.z > halfBounds) { marble.position.z = halfBounds; marbleVelocity.z *= -1; flashFace(4); }
+        else if (marble.position.z < -halfBounds) { marble.position.z = -halfBounds; marbleVelocity.z *= -1; flashFace(5); }
+
+        for (let i = 0; i < flashTimers.length; i++) {
+            if (flashTimers[i] > 0) {
+                flashTimers[i] -= deltaTime;
+                const progress = (FLASH_DURATION - flashTimers[i]) / FLASH_DURATION;
+                cubeFaceMaterials[i].opacity = THREE.MathUtils.lerp(FLASH_OPACITY, CUBE_DEFAULT_OPACITY, progress);
+            }
+        }
+    }
+
+    function flashFace(faceIndex) {
+        cubeFaceMaterials[faceIndex].opacity = FLASH_OPACITY;
+        flashTimers[faceIndex] = FLASH_DURATION;
+    }
+
+    function onWindowResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    function animate() {
+        requestAnimationFrame(animate);
+
+        const deltaTime = clock.getDelta();
+
+        // Move person
+        if (keys['ArrowUp']) { person.translateZ(moveSpeed); }
+        if (keys['ArrowDown']) { person.translateZ(-moveSpeed); }
+        if (keys['ArrowLeft']) { person.rotation.y += rotateSpeed; }
+        if (keys['ArrowRight']) { person.rotation.y -= rotateSpeed; }
+
+        // Update camera
+        if (isFPV) {
+            const cameraOffset = new THREE.Vector3(0, 1.6, 0.1);
+            const personWorldQuaternion = new THREE.Quaternion();
+            person.getWorldQuaternion(personWorldQuaternion);
+            cameraOffset.applyQuaternion(personWorldQuaternion);
+            const cameraTargetPosition = new THREE.Vector3();
+            person.getWorldPosition(cameraTargetPosition);
+            cameraTargetPosition.add(cameraOffset);
+            camera.position.copy(cameraTargetPosition);
+            const lookAtTarget = new THREE.Vector3();
+            person.getWorldPosition(lookAtTarget);
+            lookAtTarget.y += 1.6;
+            const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(personWorldQuaternion);
+            lookAtTarget.add(forward.multiplyScalar(5));
+            camera.lookAt(lookAtTarget);
+        } else {
+            const cameraOffset = new THREE.Vector3(0, 2, -4);
+            const personWorldQuaternion = new THREE.Quaternion();
+            person.getWorldQuaternion(personWorldQuaternion);
+            cameraOffset.applyQuaternion(personWorldQuaternion);
+            const cameraTargetPosition = new THREE.Vector3();
+            person.getWorldPosition(cameraTargetPosition);
+            cameraTargetPosition.add(cameraOffset);
+            camera.position.lerp(cameraTargetPosition, 0.1);
+            const lookAtTarget = new THREE.Vector3();
+            person.getWorldPosition(lookAtTarget);
+            camera.lookAt(lookAtTarget);
+        }
+
+        // --- Update the physics and visual effects ---
+        updateMarblePhysics(deltaTime);
+        updateSmokeTrail(deltaTime);
+        // ---------------------------------------------
+
+        renderer.render(scene, camera);
+    }
+
+    init();
+</script>
+
+</body>
+</html>

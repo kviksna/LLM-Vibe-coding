@@ -1,0 +1,316 @@
+<!--
+Gemini 2.5 Pro
+
+Open worl 3D fpv explorer using threejs.
+Make person minimalistic, but realistic.
+Position camera behind person.
+For move controls use Left, Right keys.
+Populate world terrain with various objects.
+Output code in in one html file.
+
+Prompt: gemini25_world_explorer_20250808.html
+Adjust my code to disable character's auto move.
+Attach forward backward move to Up,Dn keys.
+Add key 'c' to switch between camera view to FPV view and back.
+Display move instructions.
+Add half opaque light gray grid to ground.
+
+-->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Open World 3D FPV Explorer</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #AACCFF;
+        }
+        canvas {
+            display: block;
+        }
+        #instructions {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background-color: rgba(0, 0, 0, 0.5);
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: sans-serif;
+        }
+    </style>
+</head>
+<body>
+
+<div id="instructions">
+    Move: Up/Down Arrows<br>
+    Rotate: Left/Right Arrows<br>
+    Switch Camera: C
+</div>
+
+<script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+        }
+    }
+</script>
+
+<script type="module">
+    import * as THREE from 'three';
+
+    let scene, camera, renderer, person;
+    let keys = {};
+    const moveSpeed = 0.1;
+    const rotateSpeed = 0.05;
+    let isFPV = false;
+
+    function init() {
+        // Scene
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87ceeb);
+        scene.fog = new THREE.Fog(0x87ceeb, 0, 75);
+
+        // Camera
+        camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+
+        // Renderer
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.shadowMap.enabled = true;
+        document.body.appendChild(renderer.domElement);
+
+        // Lights
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        scene.add(ambientLight);
+
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+        directionalLight.position.set(5, 10, 7.5);
+        directionalLight.castShadow = true;
+        scene.add(directionalLight);
+
+        // Floor
+        const floorGeometry = new THREE.PlaneGeometry(200, 200);
+        const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x228B22, side: THREE.DoubleSide });
+        const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+        floor.rotation.x = -Math.PI / 2;
+        floor.receiveShadow = true;
+        scene.add(floor);
+
+        // Grid
+        const gridHelper = new THREE.GridHelper(200, 100, 0xcccccc, 0xcccccc);
+        gridHelper.material.opacity = 0.5;
+        gridHelper.material.transparent = true;
+        gridHelper.position.y = 0.01; // Place it slightly above the floor
+        scene.add(gridHelper);
+
+
+        // Person
+        createPerson();
+
+        // Populate World
+        populateWorld();
+
+        // Controls
+        document.addEventListener('keydown', (event) => {
+            keys[event.code] = true;
+            if (event.code === 'KeyC') {
+                isFPV = !isFPV;
+            }
+        });
+        document.addEventListener('keyup', (event) => {
+            keys[event.code] = false;
+        });
+
+        // Handle window resize
+        window.addEventListener('resize', onWindowResize, false);
+
+        animate();
+    }
+
+    function createPerson() {
+        person = new THREE.Group();
+        person.position.y = 1;
+
+        // Torso
+        const torsoGeometry = new THREE.BoxGeometry(0.5, 0.8, 0.25);
+        const torsoMaterial = new THREE.MeshStandardMaterial({ color: 0x1E90FF });
+        const torso = new THREE.Mesh(torsoGeometry, torsoMaterial);
+        torso.castShadow = true;
+        person.add(torso);
+
+        // Head
+        const headGeometry = new THREE.BoxGeometry(0.3, 0.3, 0.3);
+        const headMaterial = new THREE.MeshStandardMaterial({ color: 0xFFDAB9 });
+        const head = new THREE.Mesh(headGeometry, headMaterial);
+        head.position.y = 0.6;
+        head.castShadow = true;
+        person.add(head);
+
+        // Arms
+        const armGeometry = new THREE.BoxGeometry(0.1, 0.7, 0.1);
+        const armMaterial = new THREE.MeshStandardMaterial({ color: 0xFFDAB9 });
+
+        const leftArm = new THREE.Mesh(armGeometry, armMaterial);
+        leftArm.position.set(-0.35, 0, 0);
+        leftArm.castShadow = true;
+        person.add(leftArm);
+
+        const rightArm = new THREE.Mesh(armGeometry, armMaterial);
+        rightArm.position.set(0.35, 0, 0);
+        rightArm.castShadow = true;
+        person.add(rightArm);
+
+        // Legs
+        const legGeometry = new THREE.BoxGeometry(0.15, 0.9, 0.15);
+        const legMaterial = new THREE.MeshStandardMaterial({ color: 0x00008B });
+
+        const leftLeg = new THREE.Mesh(legGeometry, legMaterial);
+        leftLeg.position.set(-0.15, -0.8, 0);
+        leftLeg.castShadow = true;
+        person.add(leftLeg);
+
+        const rightLeg = new THREE.Mesh(legGeometry, legMaterial);
+        rightLeg.position.set(0.15, -0.8, 0);
+        rightLeg.castShadow = true;
+        person.add(rightLeg);
+
+        scene.add(person);
+    }
+
+    function populateWorld() {
+        const treeCount = 200;
+        const rockCount = 100;
+
+        // Tree materials
+        const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+        const leavesMaterial = new THREE.MeshStandardMaterial({ color: 0x006400 });
+
+        // Tree geometries
+        const trunkGeometry = new THREE.CylinderGeometry(0.2, 0.3, 1.5, 8);
+        const leavesGeometry = new THREE.ConeGeometry(1, 2, 8);
+        leavesGeometry.translate(0, 1.75, 0);
+
+        const treeGeometry = new THREE.BufferGeometry();
+        // A better approach for combining would be to merge BufferGeometries, but for simplicity we create a group
+        const treeMesh = new THREE.Mesh(trunkGeometry, trunkMaterial);
+        const leavesMesh = new THREE.Mesh(leavesGeometry, leavesMaterial);
+        treeMesh.updateMatrix();
+        leavesMesh.updateMatrix();
+        // Note: For a real application with many complex objects, merging geometries is better.
+        // This is a simplified approach.
+
+        const instancedTree = new THREE.InstancedMesh(leavesGeometry, leavesMaterial, treeCount);
+        const instancedTrunk = new THREE.InstancedMesh(trunkGeometry, trunkMaterial, treeCount);
+        scene.add(instancedTree, instancedTrunk);
+
+        const rockGeometry = new THREE.IcosahedronGeometry(0.5, 0);
+        const rockMaterial = new THREE.MeshStandardMaterial({ color: 0x808080 });
+        const instancedRock = new THREE.InstancedMesh(rockGeometry, rockMaterial, rockCount);
+        scene.add(instancedRock);
+
+
+        const matrix = new THREE.Matrix4();
+        for (let i = 0; i < treeCount; i++) {
+            const position = new THREE.Vector3(
+                (Math.random() - 0.5) * 180,
+                0.75,
+                (Math.random() - 0.5) * 180
+            );
+            const quaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.random() * Math.PI, 0));
+            const scale = new THREE.Vector3(1, Math.random() * 0.5 + 0.5, 1);
+            matrix.compose(position, quaternion, scale);
+            instancedTree.setMatrixAt(i, matrix);
+            instancedTrunk.setMatrixAt(i, matrix);
+        }
+
+        for (let i = 0; i < rockCount; i++) {
+            const position = new THREE.Vector3(
+                (Math.random() - 0.5) * 180,
+                0.25,
+                (Math.random() - 0.5) * 180
+            );
+            const quaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI));
+            const scale = new THREE.Vector3(Math.random() * 0.5 + 0.5, Math.random() * 0.5 + 0.5, Math.random() * 0.5 + 0.5);
+            matrix.compose(position, quaternion, scale);
+            instancedRock.setMatrixAt(i, matrix);
+        }
+    }
+
+
+    function onWindowResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    function animate() {
+        requestAnimationFrame(animate);
+
+        // Move person
+        if (keys['ArrowUp']) {
+            person.translateZ(moveSpeed);
+        }
+        if (keys['ArrowDown']) {
+            person.translateZ(-moveSpeed);
+        }
+        if (keys['ArrowLeft']) {
+            person.rotation.y += rotateSpeed;
+        }
+        if (keys['ArrowRight']) {
+            person.rotation.y -= rotateSpeed;
+        }
+
+        // Update camera
+        if (isFPV) {
+            // First-person view
+            const cameraOffset = new THREE.Vector3(0, 1.6, 0.1);
+            const personWorldQuaternion = new THREE.Quaternion();
+            person.getWorldQuaternion(personWorldQuaternion);
+            cameraOffset.applyQuaternion(personWorldQuaternion);
+
+            const cameraTargetPosition = new THREE.Vector3();
+            person.getWorldPosition(cameraTargetPosition);
+            cameraTargetPosition.add(cameraOffset);
+
+            camera.position.copy(cameraTargetPosition);
+
+            const lookAtTarget = new THREE.Vector3();
+            person.getWorldPosition(lookAtTarget);
+            lookAtTarget.y += 1.6;
+            const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(personWorldQuaternion);
+            lookAtTarget.add(forward);
+            camera.lookAt(lookAtTarget);
+
+        } else {
+            // Third-person view
+            const cameraOffset = new THREE.Vector3(0, 2, -4);
+            const personWorldQuaternion = new THREE.Quaternion();
+            person.getWorldQuaternion(personWorldQuaternion);
+            cameraOffset.applyQuaternion(personWorldQuaternion);
+
+            const cameraTargetPosition = new THREE.Vector3();
+            person.getWorldPosition(cameraTargetPosition);
+            cameraTargetPosition.add(cameraOffset);
+
+            camera.position.lerp(cameraTargetPosition, 0.1);
+
+            const lookAtTarget = new THREE.Vector3();
+            person.getWorldPosition(lookAtTarget);
+            camera.lookAt(lookAtTarget);
+        }
+
+
+        renderer.render(scene, camera);
+    }
+
+    init();
+</script>
+
+</body>
+</html>
